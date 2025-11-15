@@ -1,0 +1,56 @@
+{
+  "training_date": "2025-11-14T18:40:34.334798",
+  "model_type": "KMeans",
+  "model_version": "1.0.0",
+  "hyperparameters": {
+    "n_clusters": 5,
+    "n_init": 10,
+    "random_state": 42
+  },
+  "features": [
+    "age",
+    "annual_income",
+    "spending_score"
+  ],
+  "data_statistics": {
+    "n_samples": 191,
+    "n_features": 3,
+    "feature_stats": {
+      "age": {
+        "min": 18.0,
+        "max": 70.0,
+        "mean": 38.89528795811518,
+        "std": 14.836968431823365
+      },
+      "annual_income": {
+        "min": 15000.0,
+        "max": 200000.0,
+        "mean": 66397.9057591623,
+        "std": 40732.929110717814
+      },
+      "spending_score": {
+        "min": 3.0,
+        "max": 99.0,
+        "mean": 52.98429319371728,
+        "std": 24.644164255057785
+      }
+    }
+  },
+  "evaluation_metrics": {
+    "inertia": 135.76489347079936,
+    "silhouette_score": 0.3758803880075391,
+    "davies_bouldin_score": 1.0121033777417279,
+    "calinski_harabasz_score": 149.7547115004422,
+    "cluster_sizes": {
+      "0": 53,
+      "1": 29,
+      "2": 23,
+      "3": 40,
+      "4": 46
+    }
+  },
+  "training_config": {
+    "input_file": "data/sample_customers.csv",
+    "artifacts_dir": "artifacts"
+  }
+}
