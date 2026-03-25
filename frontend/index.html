@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Segmentation Studio</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;700&display=swap');
+
+        :root {
+            --paper: #f5efe4;
+            --sand: #fbf7ef;
+            --ink: #14212b;
+            --muted: #56616e;
+            --teal: #0f766e;
+            --teal-soft: rgba(15, 118, 110, 0.12);
+            --orange: #ec6b38;
+            --gold: #d8a43b;
+            --line: rgba(20, 33, 43, 0.1);
+            --card: rgba(255, 255, 255, 0.82);
+            --shadow: 0 20px 50px rgba(20, 33, 43, 0.12);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            color: var(--ink);
+            font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(236, 107, 56, 0.24), transparent 32%),
+                radial-gradient(circle at top right, rgba(15, 118, 110, 0.22), transparent 28%),
+                linear-gradient(180deg, #f8f2e6 0%, #efe6d7 100%);
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image:
+                linear-gradient(rgba(20, 33, 43, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(20, 33, 43, 0.03) 1px, transparent 1px);
+            background-size: 28px 28px;
+            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.5), transparent 95%);
+        }
+
+        .page {
+            max-width: 1240px;
+            margin: 0 auto;
+            padding: 40px 22px 56px;
+        }
+
+        .hero {
+            display: grid;
+            grid-template-columns: 1.2fr 0.9fr;
+            gap: 24px;
+            align-items: stretch;
+            margin-bottom: 24px;
+        }
+
+        .panel {
+            background: var(--card);
+            backdrop-filter: blur(14px);
+            border: 1px solid rgba(255, 255, 255, 0.65);
+            border-radius: 28px;
+            box-shadow: var(--shadow);
+        }
+
+        .hero-copy {
+            padding: 34px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero-copy::after {
+            content: "";
+            position: absolute;
+            right: -50px;
+            top: -80px;
+            width: 220px;
+            height: 220px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(236, 107, 56, 0.24), transparent 65%);
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            border-radius: 999px;
+            background: rgba(20, 33, 43, 0.08);
+            color: var(--muted);
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .hero h1 {
+            margin: 20px 0 12px;
+            font-family: "Instrument Serif", Georgia, serif;
+            font-size: clamp(3.2rem, 6vw, 5.7rem);
+            line-height: 0.94;
+            font-weight: 400;
+        }
+
+        .hero p {
+            max-width: 620px;
+            margin: 0;
+            color: var(--muted);
+            font-size: 1.02rem;
+            line-height: 1.75;
+        }
+
+        .hero-highlights {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 26px;
+        }
+
+        .pill {
+            padding: 11px 14px;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid var(--line);
+            color: var(--ink);
+            font-size: 0.93rem;
+        }
+
+        .model-desk {
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .desk-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: flex-start;
+        }
+
+        .desk-header h2,
+        .section-head h2,
+        .result-card h2 {
+            margin: 0;
+            font-size: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+        }
+
+        .status-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            border-radius: 999px;
+            padding: 10px 14px;
+            font-size: 0.92rem;
+            background: rgba(20, 33, 43, 0.08);
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--gold);
+            box-shadow: 0 0 12px rgba(216, 164, 59, 0.45);
+        }
+
+        .status-chip.online .status-dot {
+            background: var(--teal);
+            box-shadow: 0 0 12px rgba(15, 118, 110, 0.45);
+        }
+
+        .status-chip.offline .status-dot {
+            background: var(--orange);
+            box-shadow: 0 0 12px rgba(236, 107, 56, 0.45);
+        }
+
+        .api-config {
+            display: grid;
+            gap: 10px;
+        }
+
+        .api-config label,
+        .field label {
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: var(--muted);
+        }
+
+        .api-input-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+        }
+
+        input,
+        button {
+            font: inherit;
+        }
+
+        input[type="url"],
+        input[type="number"] {
+            width: 100%;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            padding: 14px 16px;
+            background: rgba(255, 255, 255, 0.88);
+            color: var(--ink);
+            transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: rgba(15, 118, 110, 0.45);
+            box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+        }
+
+        .ghost-button,
+        .primary-button,
+        .scenario-button {
+            border: none;
+            border-radius: 16px;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+        }
+
+        .ghost-button:hover,
+        .primary-button:hover,
+        .scenario-button:hover {
+            transform: translateY(-1px);
+        }
+
+        .ghost-button {
+            padding: 14px 18px;
+            background: rgba(20, 33, 43, 0.08);
+            color: var(--ink);
+        }
+
+        .primary-button {
+            padding: 15px 18px;
+            background: linear-gradient(135deg, var(--teal), #159b8f);
+            color: white;
+            box-shadow: 0 16px 24px rgba(15, 118, 110, 0.22);
+        }
+
+        .primary-button[disabled] {
+            cursor: wait;
+            opacity: 0.7;
+        }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .metric-card {
+            padding: 16px 18px;
+            border-radius: 20px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.72);
+        }
+
+        .metric-card span {
+            display: block;
+            color: var(--muted);
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 8px;
+        }
+
+        .metric-card strong {
+            font-size: 1.8rem;
+        }
+
+        .workspace {
+            display: grid;
+            grid-template-columns: 0.95fr 1.05fr;
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        .control-card,
+        .result-card,
+        .atlas {
+            padding: 30px;
+        }
+
+        .field-grid {
+            display: grid;
+            gap: 16px;
+            margin-top: 24px;
+        }
+
+        .field small,
+        .empty-state p,
+        .footnote,
+        .segment-card p,
+        .driver-list li,
+        .action-list li,
+        .flag-list li {
+            color: var(--muted);
+        }
+
+        .field small {
+            display: block;
+            margin-top: 7px;
+            font-size: 0.86rem;
+        }
+
+        .scenario-rail {
+            margin-top: 28px;
+            display: grid;
+            gap: 10px;
+        }
+
+        .scenario-button {
+            width: 100%;
+            text-align: left;
+            padding: 16px 18px;
+            background: rgba(255, 255, 255, 0.76);
+            border: 1px solid var(--line);
+        }
+
+        .scenario-button strong {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 0.98rem;
+        }
+
+        .result-card {
+            min-height: 520px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .empty-state {
+            display: grid;
+            place-items: center;
+            flex: 1;
+            text-align: center;
+            border-radius: 24px;
+            border: 1px dashed rgba(20, 33, 43, 0.14);
+            background: rgba(255, 255, 255, 0.44);
+            padding: 28px;
+        }
+
+        .result-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            width: fit-content;
+            padding: 8px 14px;
+            border-radius: 999px;
+            background: var(--teal-soft);
+            color: var(--teal);
+            font-size: 0.84rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-weight: 700;
+        }
+
+        .result-title {
+            font-family: "Instrument Serif", Georgia, serif;
+            font-size: clamp(2.4rem, 4vw, 3.6rem);
+            line-height: 0.98;
+            margin: 0;
+        }
+
+        .confidence-shell {
+            margin-top: 12px;
+        }
+
+        .confidence-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+        }
+
+        .confidence-track {
+            height: 12px;
+            border-radius: 999px;
+            background: rgba(20, 33, 43, 0.08);
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, var(--orange), var(--gold), var(--teal));
+        }
+
+        .result-columns {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        .result-block {
+            padding: 18px;
+            border-radius: 22px;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid var(--line);
+        }
+
+        .result-block h3 {
+            margin: 0 0 12px;
+            font-size: 0.84rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+        }
+
+        .driver-list,
+        .action-list,
+        .flag-list {
+            margin: 0;
+            padding-left: 18px;
+            display: grid;
+            gap: 10px;
+        }
+
+        .atlas {
+            display: grid;
+            gap: 20px;
+        }
+
+        .section-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: end;
+            gap: 12px;
+        }
+
+        .section-head p {
+            margin: 0;
+            color: var(--muted);
+            max-width: 620px;
+            line-height: 1.7;
+        }
+
+        .segment-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .segment-card {
+            padding: 20px;
+            border-radius: 22px;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid var(--line);
+            min-height: 210px;
+        }
+
+        .segment-card strong {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 1.04rem;
+        }
+
+        .segment-card .share {
+            display: inline-flex;
+            margin-top: 14px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: rgba(20, 33, 43, 0.08);
+            font-size: 0.82rem;
+            color: var(--muted);
+        }
+
+        .footer {
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 14px;
+            margin-top: 20px;
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .footer a {
+            color: inherit;
+        }
+
+        @media (max-width: 1080px) {
+            .hero,
+            .workspace {
+                grid-template-columns: 1fr;
+            }
+
+            .segment-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 720px) {
+            .page {
+                padding: 24px 16px 40px;
+            }
+
+            .hero-copy,
+            .model-desk,
+            .control-card,
+            .result-card,
+            .atlas {
+                padding: 22px;
+            }
+
+            .api-input-row,
+            .result-columns,
+            .metric-grid,
+            .segment-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .hero h1 {
+                font-size: 3rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="page">
+        <section class="hero">
+            <article class="panel hero-copy">
+                <div class="eyebrow">Portfolio-grade ML demo</div>
+                <h1>Customer Segmentation Studio</h1>
+                <p>
+                    Explore a production-style clustering system with auto-selected K-Means models,
+                    explainable predictions, business-ready segment playbooks, and live API telemetry.
+                </p>
+                <div class="hero-highlights">
+                    <div class="pill">Auto model selection</div>
+                    <div class="pill">Segment strategy outputs</div>
+                    <div class="pill">Explainable inference</div>
+                    <div class="pill">FastAPI + scikit-learn</div>
+                </div>
+            </article>
+
+            <aside class="panel model-desk">
+                <div class="desk-header">
+                    <div>
+                        <h2>Model Desk</h2>
+                        <p class="footnote">Live readout from the running inference service.</p>
+                    </div>
+                    <div id="statusChip" class="status-chip">
+                        <span class="status-dot"></span>
+                        <span id="statusLabel">Connecting...</span>
+                    </div>
+                </div>
+
+                <div class="api-config">
+                    <label for="apiBaseUrl">API Base URL</label>
+                    <div class="api-input-row">
+                        <input id="apiBaseUrl" type="url" placeholder="http://localhost:8000">
+                        <button id="refreshButton" class="ghost-button" type="button">Refresh</button>
+                    </div>
+                </div>
+
+                <div id="metricGrid" class="metric-grid">
+                    <div class="metric-card">
+                        <span>Status</span>
+                        <strong>Waiting</strong>
+                    </div>
+                    <div class="metric-card">
+                        <span>Clusters</span>
+                        <strong>--</strong>
+                    </div>
+                    <div class="metric-card">
+                        <span>Silhouette</span>
+                        <strong>--</strong>
+                    </div>
+                    <div class="metric-card">
+                        <span>Stability</span>
+                        <strong>--</strong>
+                    </div>
+                </div>
+            </aside>
+        </section>
+
+        <section class="workspace">
+            <article class="panel control-card">
+                <div class="section-head">
+                    <div>
+                        <h2>Inference Console</h2>
+                        <p>Score a single customer or jump straight into curated personas.</p>
+                    </div>
+                </div>
+
+                <form id="predictionForm" class="field-grid">
+                    <div class="field">
+                        <label for="age">Age</label>
+                        <input id="age" name="age" type="number" min="0" max="150" value="35" required>
+                        <small>Customer age in years.</small>
+                    </div>
+                    <div class="field">
+                        <label for="income">Annual Income</label>
+                        <input id="income" name="income" type="number" min="0" value="75000" required>
+                        <small>Enter the yearly income in whole currency units.</small>
+                    </div>
+                    <div class="field">
+                        <label for="spending">Spending Score</label>
+                        <input id="spending" name="spending" type="number" min="0" max="100" value="62" required>
+                        <small>0 to 100 propensity-to-spend score.</small>
+                    </div>
+                    <button id="submitButton" class="primary-button" type="submit">Run Segment Prediction</button>
+                </form>
+
+                <div class="scenario-rail">
+                    <div class="section-head">
+                        <div>
+                            <h2>Persona Presets</h2>
+                            <p>Use these to demo different customer archetypes quickly.</p>
+                        </div>
+                    </div>
+                    <div id="scenarioRail"></div>
+                </div>
+            </article>
+
+            <article class="panel result-card">
+                <div class="section-head">
+                    <div>
+                        <h2>Prediction Story</h2>
+                        <p>Every response includes confidence, drivers, and business actions.</p>
+                    </div>
+                </div>
+                <div id="resultRoot" class="empty-state">
+                    <div>
+                        <h3 class="result-title" style="font-size:2.3rem;">Ready for a live prediction</h3>
+                        <p>Submit a customer profile or choose a persona preset to populate the story panel.</p>
+                    </div>
+                </div>
+            </article>
+        </section>
+
+        <section class="panel atlas">
+            <div class="section-head">
+                <div>
+                    <h2>Segment Atlas</h2>
+                    <p>
+                        The API exposes a business-readable catalog so you can connect unsupervised clusters
+                        to actual go-to-market actions.
+                    </p>
+                </div>
+            </div>
+            <div id="segmentGrid" class="segment-grid"></div>
+            <div class="footer">
+                <span id="footerCopy">Waiting for model metadata...</span>
+                <span>
+                    API docs:
+                    <a id="docsLink" href="http://localhost:8000/docs" target="_blank" rel="noreferrer">/docs</a>
+                </span>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const DEFAULT_API_BASE_URL = localStorage.getItem("customer-segmentation-api") || "http://localhost:8000";
+        const personas = [
+            {
+                title: "Premium Loyalist",
+                description: "High income and strong buying intent.",
+                payload: { age: 33, annual_income: 145000, spending_score: 88 }
+            },
+            {
+                title: "Value Seeker",
+                description: "Budget-conscious and restrained spender.",
+                payload: { age: 48, annual_income: 36000, spending_score: 24 }
+            },
+            {
+                title: "Aspiring Spender",
+                description: "Demand is high even with tighter budget.",
+                payload: { age: 26, annual_income: 42000, spending_score: 86 }
+            },
+            {
+                title: "Affluent Conservative",
+                description: "Plenty of income, lower buying urgency.",
+                payload: { age: 57, annual_income: 160000, spending_score: 32 }
+            }
+        ];
+
+        const apiBaseUrlInput = document.getElementById("apiBaseUrl");
+        const refreshButton = document.getElementById("refreshButton");
+        const statusChip = document.getElementById("statusChip");
+        const statusLabel = document.getElementById("statusLabel");
+        const metricGrid = document.getElementById("metricGrid");
+        const scenarioRail = document.getElementById("scenarioRail");
+        const segmentGrid = document.getElementById("segmentGrid");
+        const resultRoot = document.getElementById("resultRoot");
+        const footerCopy = document.getElementById("footerCopy");
+        const docsLink = document.getElementById("docsLink");
+        const predictionForm = document.getElementById("predictionForm");
+        const submitButton = document.getElementById("submitButton");
+
+        apiBaseUrlInput.value = DEFAULT_API_BASE_URL;
+
+        function escapeHtml(value) {
+            return String(value)
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#39;");
+        }
+
+        function getApiBaseUrl() {
+            return apiBaseUrlInput.value.trim().replace(/\/$/, "") || DEFAULT_API_BASE_URL;
+        }
+
+        function persistApiBaseUrl() {
+            const value = getApiBaseUrl();
+            localStorage.setItem("customer-segmentation-api", value);
+            docsLink.href = `${value}/docs`;
+            return value;
+        }
+
+        function setStatus(mode, message) {
+            statusChip.className = `status-chip ${mode}`;
+            statusLabel.textContent = message;
+        }
+
+        function renderMetricCards(info, health) {
+            const metrics = info?.evaluation_metrics || {};
+            const cards = [
+                { label: "Service", value: health.model_loaded ? "Online" : "Offline" },
+                { label: "Clusters", value: info?.n_clusters ?? "--" },
+                {
+                    label: "Silhouette",
+                    value: typeof metrics.silhouette_score === "number" ? metrics.silhouette_score.toFixed(3) : "--"
+                },
+                {
+                    label: "Stability",
+                    value: typeof metrics.stability_ari === "number" ? metrics.stability_ari.toFixed(3) : "--"
+                }
+            ];
+
+            metricGrid.innerHTML = cards.map((card) => `
+                <div class="metric-card">
+                    <span>${escapeHtml(card.label)}</span>
+                    <strong>${escapeHtml(card.value)}</strong>
+                </div>
+            `).join("");
+        }
+
+        function renderSegments(segments) {
+            if (!segments.length) {
+                segmentGrid.innerHTML = `
+                    <div class="segment-card">
+                        <strong>No segment catalog yet</strong>
+                        <p>Train the model and refresh the dashboard.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            segmentGrid.innerHTML = segments.map((segment) => `
+                <article class="segment-card">
+                    <strong>${escapeHtml(segment.segment_name)}</strong>
+                    <p>${escapeHtml(segment.segment_description)}</p>
+                    <p>Avg age: ${escapeHtml(segment.avg_age)}</p>
+                    <p>Avg income: ${escapeHtml(segment.avg_annual_income)}</p>
+                    <p>Avg spending: ${escapeHtml(segment.avg_spending_score)}</p>
+                    <span class="share">${escapeHtml((segment.customer_share * 100).toFixed(1))}% of customers</span>
+                </article>
+            `).join("");
+        }
+
+        function renderResult(prediction) {
+            const confidence = Math.max(0, Math.min(100, (prediction.confidence_score || 0) * 100));
+            const drivers = prediction.key_drivers || [];
+            const actions = prediction.recommended_actions || [];
+            const flags = prediction.input_flags || [];
+
+            resultRoot.className = "";
+            resultRoot.innerHTML = `
+                <div class="result-badge">Segment ${escapeHtml(prediction.segment_id)}</div>
+                <h3 class="result-title">${escapeHtml(prediction.segment_name)}</h3>
+                <p>${escapeHtml(prediction.segment_description)}</p>
+
+                <div class="confidence-shell">
+                    <div class="confidence-row">
+                        <span>Confidence</span>
+                        <strong>${confidence.toFixed(1)}%</strong>
+                    </div>
+                    <div class="confidence-track">
+                        <div class="confidence-fill" style="width: ${confidence.toFixed(1)}%"></div>
+                    </div>
+                </div>
+
+                <div class="result-columns">
+                    <section class="result-block">
+                        <h3>Why This Segment</h3>
+                        <ul class="driver-list">
+                            ${drivers.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>No drivers returned.</li>"}
+                        </ul>
+                    </section>
+                    <section class="result-block">
+                        <h3>Recommended Actions</h3>
+                        <ul class="action-list">
+                            ${actions.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>No actions returned.</li>"}
+                        </ul>
+                    </section>
+                    <section class="result-block">
+                        <h3>Input Flags</h3>
+                        <ul class="flag-list">
+                            ${flags.length ? flags.map((item) => `<li>${escapeHtml(item)}</li>`).join("") : "<li>Input falls within the observed training range.</li>"}
+                        </ul>
+                    </section>
+                </div>
+            `;
+        }
+
+        function renderError(message) {
+            resultRoot.className = "";
+            resultRoot.innerHTML = `
+                <div class="result-badge" style="background: rgba(236, 107, 56, 0.14); color: var(--orange);">Prediction Error</div>
+                <h3 class="result-title" style="font-size: 2.5rem;">Service not ready</h3>
+                <p>${escapeHtml(message)}</p>
+            `;
+        }
+
+        async function fetchJson(path, options = {}) {
+            const response = await fetch(`${persistApiBaseUrl()}${path}`, options);
+            if (!response.ok) {
+                const fallback = `${response.status} ${response.statusText}`;
+                try {
+                    const payload = await response.json();
+                    throw new Error(payload.detail || fallback);
+                } catch (error) {
+                    if (error instanceof Error && error.message !== "Unexpected end of JSON input") {
+                        throw error;
+                    }
+                    throw new Error(fallback);
+                }
+            }
+            return response.json();
+        }
+
+        async function refreshDashboard() {
+            try {
+                setStatus("", "Connecting...");
+                const [health, info, segmentPayload] = await Promise.all([
+                    fetchJson("/health"),
+                    fetchJson("/model/info"),
+                    fetchJson("/segments")
+                ]);
+
+                renderMetricCards(info, health);
+                renderSegments(segmentPayload.segments || []);
+                footerCopy.textContent = `Model ${info.version} · ${info.features.length} engineered features · ${segmentPayload.segments.length} segment playbooks`;
+                setStatus("online", "Model online");
+            } catch (error) {
+                renderMetricCards(null, { model_loaded: false });
+                renderSegments([]);
+                footerCopy.textContent = "Unable to load API metadata. Start the backend and refresh.";
+                setStatus("offline", "Offline");
+                if (resultRoot.classList.contains("empty-state")) {
+                    renderError(error instanceof Error ? error.message : "Unable to connect to the API.");
+                }
+            }
+        }
+
+        function fillForm(payload) {
+            document.getElementById("age").value = payload.age;
+            document.getElementById("income").value = payload.annual_income;
+            document.getElementById("spending").value = payload.spending_score;
+        }
+
+        function renderPersonas() {
+            scenarioRail.innerHTML = personas.map((persona, index) => `
+                <button class="scenario-button" type="button" data-index="${index}">
+                    <strong>${escapeHtml(persona.title)}</strong>
+                    <span>${escapeHtml(persona.description)}</span>
+                </button>
+            `).join("");
+
+            scenarioRail.querySelectorAll(".scenario-button").forEach((button) => {
+                button.addEventListener("click", () => {
+                    const persona = personas[Number(button.dataset.index)];
+                    fillForm(persona.payload);
+                });
+            });
+        }
+
+        predictionForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            submitButton.disabled = true;
+            submitButton.textContent = "Scoring...";
+
+            const payload = {
+                age: Number(document.getElementById("age").value),
+                annual_income: Number(document.getElementById("income").value),
+                spending_score: Number(document.getElementById("spending").value)
+            };
+
+            try {
+                const prediction = await fetchJson("/predict", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                renderResult(prediction);
+            } catch (error) {
+                renderError(error instanceof Error ? error.message : "Prediction failed.");
+            } finally {
+                submitButton.disabled = false;
+                submitButton.textContent = "Run Segment Prediction";
+            }
+        });
+
+        refreshButton.addEventListener("click", refreshDashboard);
+
+        renderPersonas();
+        refreshDashboard();
+    </script>
+</body>
+</html>

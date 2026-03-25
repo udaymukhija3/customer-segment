@@ -1,4 +1,4 @@
-.PHONY: help install install-dev train test lint format clean docker-build docker-run docker-compose-up docker-compose-down
+.PHONY: help install install-dev train test lint format clean docker-build docker-run docker-compose-up docker-compose-down serve frontend
 
 help:
 	@echo "Available commands:"
@@ -27,14 +27,14 @@ test:
 	pytest --cov=api --cov=train --cov-report=term-missing --cov-report=html
 
 lint:
-	flake8 api/ train.py --max-line-length=120 --extend-ignore=E203,W503
-	black --check api/ train.py tests/
-	isort --check-only api/ train.py tests/
-	mypy api/main.py train.py --ignore-missing-imports
+	flake8 api src tests train.py train_v2.py --max-line-length=120 --extend-ignore=E203,W503
+	black --check api src train.py train_v2.py tests
+	isort --check-only api src train.py train_v2.py tests
+	mypy api/main.py src train.py train_v2.py --ignore-missing-imports
 
 format:
-	black api/ train.py tests/
-	isort api/ train.py tests/
+	black api src train.py train_v2.py tests
+	isort api src train.py train_v2.py tests
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
@@ -58,3 +58,6 @@ docker-compose-down:
 
 serve:
 	uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+
+frontend:
+	cd frontend && python3 -m http.server 3000

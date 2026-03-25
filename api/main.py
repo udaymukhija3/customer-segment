@@ -1,274 +1,416 @@
-import logging
-from pathlib import Path
-from typing import Dict, Optional, Tuple
-from datetime import datetime, timezone
-import json
+"""FastAPI application for customer segmentation inference."""
 
-import numpy as np
-from fastapi import FastAPI, HTTPException, Depends
+from __future__ import annotations
+
+import json
+import logging
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from joblib import load
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 
+from src.features import BASE_FEATURES, FeatureEngineer
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# Path configuration
-ARTIFACTS_DIR = Path(__file__).resolve().parents[1] / "artifacts"
+ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR", Path(__file__).resolve().parents[1] / "artifacts"))
 KMEANS_PATH = ARTIFACTS_DIR / "kmeans_model.pkl"
 SCALER_PATH = ARTIFACTS_DIR / "scaler.pkl"
+FEATURE_ENGINEER_PATH = ARTIFACTS_DIR / "feature_engineer.pkl"
+SEGMENT_CATALOG_PATH = ARTIFACTS_DIR / "segment_catalog.json"
 METADATA_PATH = ARTIFACTS_DIR / "model_metadata.json"
 
 
-# Pydantic models with validation
 class CustomerInput(BaseModel):
-    """Customer input data for segmentation."""
-    age: int = Field(..., ge=0, le=150, description="Customer age in years")
-    annual_income: int = Field(..., ge=0, description="Annual income in currency units")
-    spending_score: int = Field(..., ge=0, le=100, description="Spending score (0-100)")
+    """Single customer request payload."""
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        extra="ignore",
+        protected_namespaces=(),
+        json_schema_extra={
             "example": {
                 "age": 35,
                 "annual_income": 75000,
-                "spending_score": 62
+                "spending_score": 62,
             }
-        }
+        },
+    )
+
+    age: int = Field(..., ge=0, le=150, description="Customer age in years")
+    annual_income: int = Field(..., ge=0, description="Annual income in currency units")
+    spending_score: int = Field(..., ge=0, le=100, description="Spending score from 0 to 100")
 
 
 class SegmentResponse(BaseModel):
-    """Response model for segment prediction."""
-    segment_id: int = Field(..., description="Predicted segment ID (0-4)")
-    segment_name: str = Field(..., description="Human-readable segment name")
-    confidence_score: Optional[float] = Field(None, description="Prediction confidence (distance to centroid)")
+    """Detailed prediction response."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    segment_id: int
+    segment_name: str
+    confidence_score: Optional[float] = None
+    segment_description: str
+    recommended_actions: List[str] = Field(default_factory=list)
+    key_drivers: List[str] = Field(default_factory=list)
+    input_flags: List[str] = Field(default_factory=list)
+
+
+class BatchPredictionRequest(BaseModel):
+    """Batch scoring request."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    customers: List[CustomerInput] = Field(..., min_length=1, max_length=250)
+
+
+class BatchPredictionResponse(BaseModel):
+    """Batch scoring response."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    request_count: int
+    segment_counts: Dict[str, int]
+    predictions: List[SegmentResponse]
 
 
 class HealthResponse(BaseModel):
-    """Health check response."""
+    """Health endpoint response."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
     status: str
     model_loaded: bool
+    model_version: Optional[str] = None
     timestamp: str
 
 
+class SegmentSummary(BaseModel):
+    """Business summary for a trained segment."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    segment_id: int
+    segment_name: str
+    segment_description: str
+    recommended_actions: List[str]
+    customer_share: float
+    size: int
+    avg_age: float
+    avg_annual_income: float
+    avg_spending_score: float
+
+
+class SegmentCatalogResponse(BaseModel):
+    """Segment listing response."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    segments: List[SegmentSummary]
+
+
 class ModelInfoResponse(BaseModel):
-    """Model information response."""
+    """Model metadata response."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
     model_type: str
     n_clusters: int
-    features: list
+    features: List[str]
     model_loaded: bool
     artifacts_path: str
-    metadata: Optional[Dict] = None
+    version: str
+    evaluation_metrics: Dict[str, Any]
+    metadata: Optional[Dict[str, Any]] = None
 
 
-# Segment mapping
-SEGMENT_NAME: Dict[int, str] = {
-    0: "Low Income, Low Spending",
-    1: "Average Customer",
-    2: "High Income, Low Spending",
-    3: "High Spending, Low Income",
-    4: "High Income, High Spending",
-}
+def _parse_allowed_origins() -> List[str]:
+    raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
+    origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    return origins or ["*"]
 
 
-# Model container class for dependency injection
 class ModelContainer:
-    """Container for ML models and scalers."""
+    """Lazy-loaded store for trained artifacts."""
 
-    def __init__(self):
-        self.kmeans_model: Optional[KMeans] = None
-        self.scaler: Optional[StandardScaler] = None
-        self.metadata: Optional[Dict] = None
-        self.loaded: bool = False
+    def __init__(self) -> None:
+        self.kmeans_model: KMeans | None = None
+        self.scaler: StandardScaler | None = None
+        self.feature_engineer: FeatureEngineer | None = None
+        self.metadata: Dict[str, Any] | None = None
+        self.segment_catalog: Dict[int, Dict[str, Any]] = {}
+        self.loaded = False
 
     def load_models(self) -> None:
-        """Load models from artifacts directory."""
-        if not KMEANS_PATH.exists() or not SCALER_PATH.exists():
+        """Load training artifacts if they are available."""
+        required_paths = [
+            KMEANS_PATH,
+            SCALER_PATH,
+            FEATURE_ENGINEER_PATH,
+            SEGMENT_CATALOG_PATH,
+            METADATA_PATH,
+        ]
+        missing = [str(path) for path in required_paths if not path.exists()]
+        if missing:
             raise RuntimeError(
-                f"Artifacts not found. Expected '{KMEANS_PATH}' and '{SCALER_PATH}'. "
-                "Run training script first: python train.py --input <data.csv>"
+                "Missing required artifacts. Train the model first. Missing files: "
+                + ", ".join(missing)
             )
 
-        logger.info(f"Loading K-Means model from {KMEANS_PATH}")
         self.kmeans_model = load(KMEANS_PATH)
-
-        logger.info(f"Loading StandardScaler from {SCALER_PATH}")
         self.scaler = load(SCALER_PATH)
+        self.feature_engineer = load(FEATURE_ENGINEER_PATH)
+        if self.feature_engineer.scaler is None:
+            self.feature_engineer.scaler = self.scaler
 
-        # Load metadata if available
-        if METADATA_PATH.exists():
-            with open(METADATA_PATH, 'r') as f:
-                self.metadata = json.load(f)
-            logger.info(f"Loaded model metadata: {self.metadata}")
-
+        self.metadata = json.loads(METADATA_PATH.read_text(encoding="utf-8"))
+        catalog_entries = json.loads(SEGMENT_CATALOG_PATH.read_text(encoding="utf-8"))
+        self.segment_catalog = {
+            int(entry["segment_id"]): entry for entry in catalog_entries
+        }
         self.loaded = True
-        logger.info("Models loaded successfully")
+        logger.info("Loaded customer segmentation artifacts from %s", ARTIFACTS_DIR)
 
-    def predict(self, features: np.ndarray) -> Tuple[int, float]:
-        """
-        Predict segment for given features.
+    def _raw_frame(self, payloads: List[CustomerInput]) -> pd.DataFrame:
+        return pd.DataFrame([payload.model_dump() for payload in payloads], columns=BASE_FEATURES)
 
-        Args:
-            features: Input features array
+    def _key_drivers(self, row: Dict[str, float], segment: Dict[str, Any]) -> List[str]:
+        medians = (self.metadata or {}).get("data_statistics", {}).get("medians", {})
+        driver_candidates: List[tuple[float, str]] = []
 
-        Returns:
-            Tuple of (segment_id, confidence_score)
-        """
-        if not self.loaded:
-            raise RuntimeError("Models not loaded")
+        labels = {
+            "age": "Age",
+            "annual_income": "Annual income",
+            "spending_score": "Spending score",
+        }
+        for column, label in labels.items():
+            baseline = medians.get(column, 0.0)
+            value = float(row[column])
+            if baseline:
+                delta = ((value - baseline) / baseline) * 100.0
+                direction = "above" if delta >= 0 else "below"
+                statement = f"{label} is {abs(delta):.0f}% {direction} the portfolio median."
+                driver_candidates.append((abs(delta), statement))
+            else:
+                delta = abs(value - baseline)
+                driver_candidates.append((delta, f"{label} is materially different from the training baseline."))
 
-        # Scale features
-        features_scaled = self.scaler.transform(features)
+        if segment.get("income_level") == "high":
+            driver_candidates.append((15.0, "The profile aligns with one of the portfolio's high-income tiers."))
+        if segment.get("spending_level") == "high":
+            driver_candidates.append((15.0, "Spending behavior maps to a high-intent customer segment."))
+        if segment.get("spending_level") == "low":
+            driver_candidates.append((10.0, "Spending behavior skews conservative relative to the portfolio."))
 
-        # Predict cluster
-        segment_id = int(self.kmeans_model.predict(features_scaled)[0])
+        driver_candidates.sort(key=lambda item: item[0], reverse=True)
+        return [statement for _, statement in driver_candidates[:3]]
 
-        # Calculate confidence (inverse of distance to centroid)
-        distances = self.kmeans_model.transform(features_scaled)[0]
-        confidence = float(1 / (1 + distances[segment_id]))
+    def _input_flags(self, row: Dict[str, float]) -> List[str]:
+        bounds = (self.metadata or {}).get("data_statistics", {}).get("bounds", {})
+        labels = {
+            "age": "Age",
+            "annual_income": "Annual income",
+            "spending_score": "Spending score",
+        }
+        flags: List[str] = []
 
-        return segment_id, confidence
+        for column, label in labels.items():
+            column_bounds = bounds.get(column)
+            if not column_bounds:
+                continue
+
+            value = float(row[column])
+            if value < column_bounds["min"] or value > column_bounds["max"]:
+                flags.append(
+                    f"{label} sits outside the training range "
+                    f"({column_bounds['min']} to {column_bounds['max']})."
+                )
+
+        return flags
+
+    def predict(self, payloads: List[CustomerInput]) -> List[SegmentResponse]:
+        """Score one or more customers."""
+        if not self.loaded or self.kmeans_model is None or self.feature_engineer is None:
+            raise RuntimeError("Models are not loaded.")
+
+        raw_frame = self._raw_frame(payloads)
+        _, features_scaled = self.feature_engineer.transform_for_inference(raw_frame)
+        segment_ids = self.kmeans_model.predict(features_scaled).astype(int)
+        distances = self.kmeans_model.transform(features_scaled)
+
+        responses: List[SegmentResponse] = []
+        for index, segment_id in enumerate(segment_ids):
+            segment = self.segment_catalog.get(
+                segment_id,
+                {
+                    "segment_name": f"Segment {segment_id}",
+                    "segment_description": "Uncatalogued segment.",
+                    "recommended_actions": [],
+                },
+            )
+            confidence = float(1.0 / (1.0 + distances[index, segment_id]))
+            raw_row = raw_frame.iloc[index].to_dict()
+            responses.append(
+                SegmentResponse(
+                    segment_id=segment_id,
+                    segment_name=segment["segment_name"],
+                    confidence_score=round(confidence, 4),
+                    segment_description=segment["segment_description"],
+                    recommended_actions=segment.get("recommended_actions", []),
+                    key_drivers=self._key_drivers(raw_row, segment),
+                    input_flags=self._input_flags(raw_row),
+                )
+            )
+
+        return responses
 
 
-# Global model container
 model_container = ModelContainer()
 
 
-# Dependency injection
 def get_model_container() -> ModelContainer:
-    """Dependency to get the model container."""
+    """FastAPI dependency for loaded model access."""
     if not model_container.loaded:
-        raise HTTPException(
-            status_code=503,
-            detail="Models not loaded. Service unavailable."
-        )
+        raise HTTPException(status_code=503, detail="Models not loaded. Train the service artifacts first.")
     return model_container
 
 
-# FastAPI app initialization
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    try:
+        model_container.load_models()
+    except Exception as exc:  # pragma: no cover - exercised in runtime startup failures
+        logger.error("Service started without loaded artifacts: %s", exc)
+    yield
+
+
 app = FastAPI(
     title="Customer Segmentation API",
-    version="2.0.0",
-    description="Production-ready ML API for customer segmentation using K-Means clustering",
+    version="3.0.0",
+    description="Portfolio-grade ML inference service for customer segmentation.",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_parse_allowed_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
-@app.on_event("startup")
-async def startup_event() -> None:
-    """Load models on application startup."""
-    try:
-        model_container.load_models()
-        logger.info("Application startup complete")
-    except Exception as e:
-        logger.error(f"Failed to load models on startup: {e}")
-        raise
-
-
-@app.on_event("shutdown")
-async def shutdown_event() -> None:
-    """Cleanup on application shutdown."""
-    logger.info("Application shutting down")
-
-
-@app.get("/", tags=["Health"])
-def root() -> Dict[str, str]:
-    """Root endpoint."""
+@app.get("/", tags=["Overview"])
+def root() -> Dict[str, Any]:
+    """Basic service summary."""
     return {
         "message": "Customer Segmentation API",
-        "version": "2.0.0",
-        "docs": "/docs"
+        "version": app.version,
+        "docs": "/docs",
+        "model_loaded": model_container.loaded,
+        "artifacts_path": str(ARTIFACTS_DIR),
     }
 
 
-@app.get("/health", response_model=HealthResponse, tags=["Health"])
+@app.get("/health", response_model=HealthResponse, tags=["Overview"])
 def health_check() -> HealthResponse:
-    """
-    Health check endpoint for monitoring and load balancers.
-    """
+    """Health probe for dashboards and orchestration."""
+    metadata = model_container.metadata or {}
     return HealthResponse(
         status="healthy" if model_container.loaded else "unhealthy",
         model_loaded=model_container.loaded,
-        timestamp=datetime.now(timezone.utc).isoformat()
+        model_version=metadata.get("model_version"),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
 
 @app.get("/model/info", response_model=ModelInfoResponse, tags=["Model"])
 def model_info(container: ModelContainer = Depends(get_model_container)) -> ModelInfoResponse:
-    """
-    Get information about the loaded model.
-    """
+    """Return the trained model contract and evaluation summary."""
+    metadata = container.metadata or {}
+    feature_summary = metadata.get("feature_summary", {})
     return ModelInfoResponse(
-        model_type="K-Means Clustering",
-        n_clusters=container.kmeans_model.n_clusters if container.kmeans_model else 0,
-        features=["age", "annual_income", "spending_score"],
+        model_type=metadata.get("model_type", "KMeans"),
+        n_clusters=int(metadata.get("hyperparameters", {}).get("n_clusters", 0)),
+        features=feature_summary.get("output_features", BASE_FEATURES),
         model_loaded=container.loaded,
         artifacts_path=str(ARTIFACTS_DIR),
-        metadata=container.metadata
+        version=metadata.get("model_version", app.version),
+        evaluation_metrics=metadata.get("evaluation_metrics", {}),
+        metadata=metadata,
     )
+
+
+@app.get("/segments", response_model=SegmentCatalogResponse, tags=["Model"])
+def list_segments(container: ModelContainer = Depends(get_model_container)) -> SegmentCatalogResponse:
+    """List business-friendly segment summaries."""
+    segments = [SegmentSummary(**segment) for segment in container.segment_catalog.values()]
+    segments.sort(key=lambda item: item.segment_id)
+    return SegmentCatalogResponse(segments=segments)
 
 
 @app.post("/predict", response_model=SegmentResponse, tags=["Prediction"])
 def predict_segment(
     payload: CustomerInput,
-    container: ModelContainer = Depends(get_model_container)
+    container: ModelContainer = Depends(get_model_container),
 ) -> SegmentResponse:
-    """
-    Predict customer segment based on input features.
-
-    Args:
-        payload: Customer input data (age, annual_income, spending_score)
-
-    Returns:
-        Predicted segment ID, name, and confidence score
-
-    Raises:
-        HTTPException: If prediction fails
-    """
+    """Predict the most likely customer segment for one payload."""
     try:
-        logger.info(f"Prediction request: {payload.dict()}")
-
-        # Prepare features
-        features = np.array(
-            [[payload.age, payload.annual_income, payload.spending_score]],
-            dtype=float
-        )
-
-        # Get prediction
-        segment_id, confidence = container.predict(features)
-        segment_name = SEGMENT_NAME.get(segment_id, f"Segment {segment_id}")
-
-        logger.info(f"Prediction result: segment_id={segment_id}, confidence={confidence:.4f}")
-
-        return SegmentResponse(
-            segment_id=segment_id,
-            segment_name=segment_name,
-            confidence_score=round(confidence, 4)
-        )
-
-    except ValueError as e:
-        logger.error(f"Validation error: {e}")
-        raise HTTPException(status_code=422, detail=f"Invalid input: {str(e)}")
-    except Exception as e:
-        logger.error(f"Prediction error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+        return container.predict([payload])[0]
+    except ValueError as exc:
+        logger.error("Validation error during prediction: %s", exc)
+        raise HTTPException(status_code=422, detail=f"Invalid input: {exc}") from exc
+    except Exception as exc:  # pragma: no cover - unexpected runtime path
+        logger.error("Prediction failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {exc}") from exc
 
 
-# Backwards compatibility - keep old endpoint
+@app.post("/predict/batch", response_model=BatchPredictionResponse, tags=["Prediction"])
+def predict_batch(
+    payload: BatchPredictionRequest,
+    container: ModelContainer = Depends(get_model_container),
+) -> BatchPredictionResponse:
+    """Predict segments for a batch of customers."""
+    try:
+        predictions = container.predict(payload.customers)
+    except ValueError as exc:
+        logger.error("Validation error during batch prediction: %s", exc)
+        raise HTTPException(status_code=422, detail=f"Invalid input: {exc}") from exc
+    except Exception as exc:  # pragma: no cover - unexpected runtime path
+        logger.error("Batch prediction failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {exc}") from exc
+
+    segment_counts: Dict[str, int] = {}
+    for prediction in predictions:
+        key = str(prediction.segment_id)
+        segment_counts[key] = segment_counts.get(key, 0) + 1
+
+    return BatchPredictionResponse(
+        request_count=len(predictions),
+        segment_counts=segment_counts,
+        predictions=predictions,
+    )
+
+
 @app.post("/get_segment", response_model=SegmentResponse, tags=["Prediction"], deprecated=True)
 def get_segment_deprecated(
     payload: CustomerInput,
-    container: ModelContainer = Depends(get_model_container)
+    container: ModelContainer = Depends(get_model_container),
 ) -> SegmentResponse:
-    """
-    Legacy endpoint for segment prediction (deprecated, use /predict instead).
-    """
-    logger.warning("Deprecated endpoint /get_segment called, use /predict instead")
+    """Backward-compatible prediction endpoint."""
+    logger.warning("Deprecated endpoint /get_segment called, use /predict instead.")
     return predict_segment(payload, container)
